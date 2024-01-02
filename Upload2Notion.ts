@@ -1,6 +1,6 @@
-import { Notice, requestUrl,TFile,normalizePath, App } from "obsidian";
+import { Notice, requestUrl, TFile, normalizePath, App } from "obsidian";
 import { Client } from "@notionhq/client";
-import { markdownToBlocks,  } from "@tryfabric/martian";
+import { markdownToBlocks, } from "@tryfabric/martian";
 import * as yamlFrontMatter from "yaml-front-matter";
 import * as yaml from "yaml"
 import MyPlugin from "main";
@@ -12,7 +12,7 @@ export class Upload2Notion {
 		this.app = app;
 	}
 
-	async deletePage(notionID:string){
+	async deletePage(notionID: string) {
 		const response = await requestUrl({
 			url: `https://api.notion.com/v1/blocks/${notionID}`,
 			method: 'DELETE',
@@ -28,14 +28,14 @@ export class Upload2Notion {
 
 	// 因为需要解析notion的block进行对比，非常的麻烦，
 	// 暂时就直接删除，新建一个page
-	async updatePage(notionID:string, title:string, allowTags:boolean, tags:string[], childArr:any) {
+	async updatePage(notionID: string, title: string, allowTags: boolean, frontmatters: object, backlinks: string[], childArr: any) {
 		await this.deletePage(notionID)
-		const res = await this.createPage(title, allowTags, tags, childArr)
+		const res = await this.createPage(title, allowTags, frontmatters, backlinks, childArr)
 		return res
 	}
 
-	async createPage(title:string, allowTags:boolean, tags:string[], childArr: any) {
-		const bodyString:any = {
+	async createPage(title: string, allowTags: boolean, frontmatters: object, backlinks: string[], childArr: any) {
+		const bodyString: any = {
 			parent: {
 				database_id: this.app.settings.databaseID
 			},
@@ -50,15 +50,32 @@ export class Upload2Notion {
 					],
 				},
 				Tags: {
-					multi_select: allowTags && tags !== undefined ? tags.map(tag => {
-						return {"name": tag}
+					multi_select: allowTags && frontmatters.tags !== undefined ? frontmatters.tags.map(tag => {
+						return { "name": tag }
 					}) : [],
 				},
+				Type: {
+					rich_text: [
+						{
+							text: {
+								content: frontmatters.type ? frontmatters.type : '',
+							},
+						},
+					],
+				},
+				Kairyoku: {
+					number: frontmatters.kairyoku ? frontmatters.kairyoku : 0,
+				},
+				Backlinks: {
+					multi_select: backlinks !== undefined ? backlinks.map(b => {
+						return { "name": b }
+					}) : [],
+				}
 			},
 			children: childArr,
 		}
 
-		if(this.app.settings.bannerUrl) {
+		if (this.app.settings.bannerUrl) {
 			bodyString.cover = {
 				type: "external",
 				external: {
@@ -75,28 +92,29 @@ export class Upload2Notion {
 					'Content-Type': 'application/json',
 					// 'User-Agent': 'obsidian.md',
 					'Authorization': 'Bearer ' + this.app.settings.notionAPI,
-					'Notion-Version': '2021-08-16',
+					'Notion-Version': '2022-06-28',
 				},
 				body: JSON.stringify(bodyString),
 			})
 			return response;
 		} catch (error) {
-				new Notice(`network error ${error}`)
+			new Notice(`network error ${error}`)
 		}
 	}
 
-	async syncMarkdownToNotion(title:string, allowTags:boolean, tags:string[], markdown: string, nowFile: TFile, app:App, settings:any): Promise<any> {
-		let res:any
-		const yamlObj:any = yamlFrontMatter.loadFront(markdown);
+	async syncMarkdownToNotion(title: string, allowTags: boolean, frontmatters: object, markdown: string, nowFile: TFile, app: App, settings: any): Promise<any> {
+		let res: any
+		const yamlObj: any = yamlFrontMatter.loadFront(markdown);
 		const __content = yamlObj.__content
 		const file2Block = markdownToBlocks(__content);
-		const frontmasster =await app.metadataCache.getFileCache(nowFile)?.frontmatter
+		const frontmasster = frontmatters;
 		const notionID = frontmasster ? frontmasster.notionID : null
+		const backlinks = await this.getBackLinkArrays(nowFile);
 
-		if(notionID){
-				res = await this.updatePage(notionID, title, allowTags, tags, file2Block);
+		if (notionID) {
+			res = await this.updatePage(notionID, title, allowTags, frontmasster, backlinks, file2Block);
 		} else {
-			 	res = await this.createPage(title, allowTags, tags, file2Block);
+			res = await this.createPage(title, allowTags, frontmasster, backlinks, file2Block);
 		}
 		if (res.status === 200) {
 			await this.updateYamlInfo(markdown, nowFile, res, app, settings)
@@ -106,14 +124,14 @@ export class Upload2Notion {
 		return res
 	}
 
-	async updateYamlInfo(yamlContent: string, nowFile: TFile, res: any,app:App, settings:any) {
-		const yamlObj:any = yamlFrontMatter.loadFront(yamlContent);
-		let {url, id} = res.json
+	async updateYamlInfo(yamlContent: string, nowFile: TFile, res: any, app: App, settings: any) {
+		const yamlObj: any = yamlFrontMatter.loadFront(yamlContent);
+		let { url, id } = res.json
 		// replace www to notionID
-		const {notionID} = settings;
-		if(notionID!=="") {
+		const { notionID } = settings;
+		if (notionID !== "") {
 			// replace url str "www" to notionID
-			url  = url.replace("www.notion.so", `${notionID}.notion.site`)
+			url = url.replace("www.notion.so", `${notionID}.notion.site`)
 		}
 		yamlObj.link = url;
 		try {
@@ -129,11 +147,21 @@ export class Upload2Notion {
 		const yamlhead_remove_n = yamlhead.replace(/\n$/, '')
 		// if __content have start \n remove it
 		const __content_remove_n = __content.replace(/^\n/, '')
-		const content = '---\n' +yamlhead_remove_n +'\n---\n' + __content_remove_n;
+		const content = '---\n' + yamlhead_remove_n + '\n---\n' + __content_remove_n;
 		try {
 			await nowFile.vault.modify(nowFile, content)
 		} catch (error) {
 			new Notice(`write file error ${error}`)
 		}
+	}
+
+	async getBackLinkArrays(file: TFile) {
+		let result: string[] = [];
+		Object.entries(app.metadataCache.getBacklinksForFile(file).data)
+			.map(([key, value]) => ({ key, value }))
+			.forEach((v) => {
+				result.push(v.key.match(/.*\/(.*)\.md/)[1]);
+		});
+		return result;
 	}
 }
