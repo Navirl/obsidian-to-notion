@@ -156,12 +156,7 @@ export class Upload2Notion {
 	}
 
 	async getBackLinkArrays(file: TFile) {
-		let result: string[] = [];
-		Object.entries(app.metadataCache.getBacklinksForFile(file).data)
-			.map(([key, value]) => ({ key, value }))
-			.forEach((v) => {
-				result.push(v.key.match(/.*\/(.*)\.md/)[1]);
-		});
-		return result;
+		return Object.entries(app.metadataCache.getBacklinksForFile(file).data)
+		.map(([key, _]) => key.match(/.*\/(.*)\.md/)[1]);
 	}
 }
